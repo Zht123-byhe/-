@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+校园学生信息管理系统
+开发语言：Python 3.x
+技术栈：Tkinter + SQLite
+功能：学生信息的增删改查
+"""
+
+import sqlite3
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+# ---------------------------- 数据库操作模块 ----------------------------
+class StudentDatabase:
+    """SQLite数据库管理类"""
+    def __init__(self, db_name="student.db"):
+        self.db_name = db_name
+        self.conn = None
+        self.cursor = None
+        self._connect()
+        self._create_table()
+
+    def _connect(self):
+        """建立数据库连接"""
+        try:
+            self.conn = sqlite3.connect(self.db_name)
+            self.cursor = self.conn.cursor()
+        except sqlite3.Error as e:
+            messagebox.showerror("数据库错误", f"连接数据库失败：{e}")
+
+    def _create_table(self):
+        """创建学生信息表"""
+        sql = """
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            age INTEGER,
+            gender TEXT,
+            major TEXT
+        )
+        """
+        try:
+            self.cursor.execute(sql)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            messagebox.showerror("数据库错误", f"创建表失败：{e}")
+
+    # ---------- 增删改查操作 ----------
+    def add_student(self, student_id, name, age, gender, major):
+        """添加学生"""
+        try:
+            self.cursor.execute(
+                "INSERT INTO students (student_id, name, age, gender, major) VALUES (?, ?, ?, ?, ?)",
+                (student_id, name, age, gender, major)
+            )
+            self.conn.commit()
+            return True, "添加成功"
+        except sqlite3.IntegrityError:
+            return False, "学号已存在"
+        except Exception as e:
+            return False, f"添加失败：{e}"
+
+    def delete_student(self, student_id):
+        """删除学生（根据学号）"""
+        try:
+            self.cursor.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
+            self.conn.commit()
+            if self.cursor.rowcount > 0:
+                return True, "删除成功"
+            else:
+                return False, "未找到该学号的学生"
+        except Exception as e:
+            return False, f"删除失败：{e}"
+
+    def update_student(self, old_student_id, new_student_id, name, age, gender, major):
+        """修改学生信息（学号不可重复）"""
+        try:
+            # 先检查新学号是否已被其他学生占用（当学号改变时）
+            if old_student_id != new_student_id:
+                self.cursor.execute("SELECT student_id FROM students WHERE student_id = ?", (new_student_id,))
+                if self.cursor.fetchone():
+                    return False, "新学号已存在"
+            self.cursor.execute(
+                "UPDATE students SET student_id=?, name=?, age=?, gender=?, major=? WHERE student_id=?",
+                (new_student_id, name, age, gender, major, old_student_id)
+            )
+            self.conn.commit()
+            if self.cursor.rowcount > 0:
+                return True, "修改成功"
+            else:
+                return False, "未找到该学号的学生"
+        except Exception as e:
+            return False, f"修改失败：{e}"
+
+    def query_students(self, keyword=""):
+        """查询学生（支持学号/姓名模糊查询，空关键字返回所有）"""
+        try:
+            if keyword.strip() == "":
+                self.cursor.execute("SELECT * FROM students ORDER BY student_id")
+            else:
+                like = f"%{keyword}%"
+                self.cursor.execute(
+                    "SELECT * FROM students WHERE student_id LIKE ? OR name LIKE ? ORDER BY student_id",
+                    (like, like)
+                )
+            rows = self.cursor.fetchall()
+            return rows
+        except Exception as e:
+            messagebox.showerror("查询错误", f"查询失败：{e}")
+            return []
+
+    def close(self):
+        """关闭数据库连接"""
+        if self.conn:
+            self.conn.close()
+
+
+# ---------------------------- GUI 界面模块 ----------------------------
+class StudentManagementSystem:
+    """主界面类"""
+    def __init__(self, root):
+        self.root = root
+        self.root.title("校园学生信息管理系统")
+        self.root.geometry("900x600")
+        self.root.resizable(True, True)
+
+        # 初始化数据库
+        self.db = StudentDatabase()
+
+        # 创建界面组件
+        self.create_widgets()
+
+        # 初始加载所有学生数据
+        self.refresh_treeview()
+
+        # 绑定窗口关闭事件，释放数据库资源
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def create_widgets(self):
+        """创建所有界面组件"""
+        # ---------- 顶部：输入区域 ----------
+        frame_input = tk.LabelFrame(self.root, text="学生信息录入/修改", font=("微软雅黑", 10))
+        frame_input.pack(pady=10, padx=10, fill="x")
+
+        # 学号
+        tk.Label(frame_input, text="学号：").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        self.entry_id = tk.Entry(frame_input, width=15)
+        self.entry_id.grid(row=0, column=1, padx=5, pady=5)
+
+        # 姓名
+        tk.Label(frame_input, text="姓名：").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+        self.entry_name = tk.Entry(frame_input, width=12)
+        self.entry_name.grid(row=0, column=3, padx=5, pady=5)
+
+        # 年龄
+        tk.Label(frame_input, text="年龄：").grid(row=0, column=4, padx=5, pady=5, sticky="e")
+        self.entry_age = tk.Entry(frame_input, width=6)
+        self.entry_age.grid(row=0, column=5, padx=5, pady=5)
+
+        # 性别
+        tk.Label(frame_input, text="性别：").grid(row=0, column=6, padx=5, pady=5, sticky="e")
+        self.combo_gender = ttk.Combobox(frame_input, values=["男", "女"], width=6)
+        self.combo_gender.grid(row=0, column=7, padx=5, pady=5)
+        self.combo_gender.current(0)
+
+        # 专业
+        tk.Label(frame_input, text="专业：").grid(row=0, column=8, padx=5, pady=5, sticky="e")
+        self.entry_major = tk.Entry(frame_input, width=12)
+        self.entry_major.grid(row=0, column=9, padx=5, pady=5)
+
+        # 按钮区域（添加/修改/清空）
+        frame_buttons = tk.Frame(frame_input)
+        frame_buttons.grid(row=1, column=0, columnspan=10, pady=8)
+
+        self.btn_add = tk.Button(frame_buttons, text="添加学生", width=10, bg="#4CAF50", fg="white", command=self.add_student)
+        self.btn_add.pack(side="left", padx=5)
+
+        self.btn_update = tk.Button(frame_buttons, text="修改学生", width=10, bg="#2196F3", fg="white", command=self.update_student)
+        self.btn_update.pack(side="left", padx=5)
+
+        self.btn_clear = tk.Button(frame_buttons, text="清空输入", width=10, bg="#FFC107", command=self.clear_inputs)
+        self.btn_clear.pack(side="left", padx=5)
+
+        # ---------- 中间：搜索区域 ----------
+        frame_search = tk.LabelFrame(self.root, text="查询条件", font=("微软雅黑", 10))
+        frame_search.pack(pady=5, padx=10, fill="x")
+
+        tk.Label(frame_search, text="学号/姓名关键字：").pack(side="left", padx=5)
+        self.entry_search = tk.Entry(frame_search, width=20)
+        self.entry_search.pack(side="left", padx=5)
+
+        self.btn_search = tk.Button(frame_search, text="查询", width=8, command=self.search_students)
+        self.btn_search.pack(side="left", padx=5)
+
+        self.btn_refresh = tk.Button(frame_search, text="显示全部", width=8, command=self.refresh_treeview)
+        self.btn_refresh.pack(side="left", padx=5)
+
+        # ---------- 底部：学生列表（Treeview） ----------
+        frame_list = tk.LabelFrame(self.root, text="学生列表", font=("微软雅黑", 10))
+        frame_list.pack(pady=5, padx=10, fill="both", expand=True)
+
+        # 创建滚动条
+        scrollbar = tk.Scrollbar(frame_list)
+        scrollbar.pack(side="right", fill="y")
+
+        self.tree = ttk.Treeview(frame_list, columns=("学号", "姓名", "年龄", "性别", "专业"), show="headings", yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.tree.yview)
+
+        # 定义列标题及宽度
+        self.tree.heading("学号", text="学号")
+        self.tree.heading("姓名", text="姓名")
+        self.tree.heading("年龄", text="年龄")
+        self.tree.heading("性别", text="性别")
+        self.tree.heading("专业", text="专业")
+
+        self.tree.column("学号", width=150, anchor="center")
+        self.tree.column("姓名", width=100, anchor="center")
+        self.tree.column("年龄", width=60, anchor="center")
+        self.tree.column("性别", width=60, anchor="center")
+        self.tree.column("专业", width=150, anchor="center")
+
+        self.tree.pack(fill="both", expand=True)
+
+        # 绑定选中事件，自动填充到输入框
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+
+        # 右侧：删除按钮（独立放置）
+        frame_delete = tk.Frame(self.root)
+        frame_delete.pack(pady=10)
+
+        self.btn_delete = tk.Button(frame_delete, text="删除选中学生", width=12, bg="#f44336", fg="white", command=self.delete_student)
+        self.btn_delete.pack()
+
+    def refresh_treeview(self):
+        """刷新列表，显示所有学生"""
+        rows = self.db.query_students("")
+        self._update_treeview(rows)
+
+    def search_students(self):
+        """根据关键字查询学生"""
+        keyword = self.entry_search.get().strip()
+        rows = self.db.query_students(keyword)
+        self._update_treeview(rows)
+
+    def _update_treeview(self, rows):
+        """更新Treeview显示"""
+        # 清空现有数据
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        # 插入新数据
+        for row in rows:
+            # row 结构: (id, student_id, name, age, gender, major)
+            self.tree.insert("", "end", values=(row[1], row[2], row[3], row[4], row[5]))
+
+    def on_tree_select(self, event):
+        """单击列表项时，自动将数据填充到输入框"""
+        selected = self.tree.selection()
+        if not selected:
+            return
+        values = self.tree.item(selected[0], "values")
+        if values:
+            self.entry_id.delete(0, tk.END)
+            self.entry_id.insert(0, values[0])   # 学号
+            self.entry_name.delete(0, tk.END)
+            self.entry_name.insert(0, values[1]) # 姓名
+            self.entry_age.delete(0, tk.END)
+            self.entry_age.insert(0, values[2])  # 年龄
+            self.combo_gender.set(values[3])     # 性别
+            self.entry_major.delete(0, tk.END)
+            self.entry_major.insert(0, values[4])# 专业
+
+    def clear_inputs(self):
+        """清空所有输入框"""
+        self.entry_id.delete(0, tk.END)
+        self.entry_name.delete(0, tk.END)
+        self.entry_age.delete(0, tk.END)
+        self.combo_gender.set("男")
+        self.entry_major.delete(0, tk.END)
+        self.entry_search.delete(0, tk.END)
+
+    def add_student(self):
+        """添加学生"""
+        student_id = self.entry_id.get().strip()
+        name = self.entry_name.get().strip()
+        age = self.entry_age.get().strip()
+        gender = self.combo_gender.get()
+        major = self.entry_major.get().strip()
+
+        # 基本校验
+        if not student_id:
+            messagebox.showwarning("警告", "学号不能为空")
+            return
+        if not name:
+            messagebox.showwarning("警告", "姓名不能为空")
+            return
+        if age:
+            try:
+                age = int(age)
+                if age <= 0 or age > 150:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("警告", "年龄必须为1~150之间的整数")
+                return
+        else:
+            age = None
+
+        success, msg = self.db.add_student(student_id, name, age, gender, major)
+        if success:
+            messagebox.showinfo("成功", msg)
+            self.refresh_treeview()
+            self.clear_inputs()
+        else:
+            messagebox.showerror("失败", msg)
+
+    def update_student(self):
+        """修改学生信息"""
+        old_id = self.entry_id.get().strip()   # 原学号（不可更改，但用于定位）
+        new_id = old_id                         # 默认学号不变，允许用户修改
+        name = self.entry_name.get().strip()
+        age = self.entry_age.get().strip()
+        gender = self.combo_gender.get()
+        major = self.entry_major.get().strip()
+
+        if not old_id:
+            messagebox.showwarning("警告", "请先选择或输入要修改的学号")
+            return
+        if not name:
+            messagebox.showwarning("警告", "姓名不能为空")
+            return
+        # 如果输入框中学号被手动修改，则 new_id 使用新值，允许变更学号
+        new_id = self.entry_id.get().strip()
+        if not new_id:
+            messagebox.showwarning("警告", "学号不能为空")
+            return
+
+        if age:
+            try:
+                age = int(age)
+                if age <= 0 or age > 150:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("警告", "年龄必须为1~150之间的整数")
+                return
+        else:
+            age = None
+
+        success, msg = self.db.update_student(old_id, new_id, name, age, gender, major)
+        if success:
+            messagebox.showinfo("成功", msg)
+            self.refresh_treeview()
+            self.clear_inputs()
+        else:
+            messagebox.showerror("失败", msg)
+
+    def delete_student(self):
+        """删除选中的学生"""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选中要删除的学生")
+            return
+        values = self.tree.item(selected[0], "values")
+        student_id = values[0]
+        # 二次确认
+        if messagebox.askyesno("确认删除", f"确定要删除学号为 {student_id} 的学生吗？"):
+            success, msg = self.db.delete_student(student_id)
+            if success:
+                messagebox.showinfo("成功", msg)
+                self.refresh_treeview()
+                self.clear_inputs()
+            else:
+                messagebox.showerror("失败", msg)
+
+    def on_closing(self):
+        """关闭窗口时释放数据库连接"""
+        self.db.close()
+        self.root.destroy()
+
+
+# ---------------------------- 程序入口 ----------------------------
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = StudentManagementSystem(root)
+    root.mainloop()
